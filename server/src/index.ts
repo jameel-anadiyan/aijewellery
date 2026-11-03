@@ -2,15 +2,9 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
 import { AnalyzeInputSchema, GenerateInputSchema } from './schemas.js';
 import { analyzeDesign, generateCardImage } from './openaiService.js';
 import { jobStore } from './jobs.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -22,11 +16,11 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Multer memory storage (max 10MB as in PLAN.md)
+// Multer memory storage (max 10MB)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10 MB
+    fileSize: 10 * 1024 * 1024,
   },
   fileFilter: (_req, file, cb) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp'];
@@ -41,7 +35,7 @@ const upload = multer({
 // Optional simple password middleware if APP_PASSWORD is set
 app.use((req: Request, res: Response, next: NextFunction) => {
   const appPassword = process.env.APP_PASSWORD;
-  if (!appPassword || req.path === '/api/health' || !req.path.startsWith('/api')) {
+  if (!appPassword || req.path.endsWith('/health')) {
     return next();
   }
   const provided = req.headers['x-app-password'] || req.query.password;
@@ -56,8 +50,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Health check endpoint (Milestone 1)
-app.get('/api/health', (_req: Request, res: Response) => {
+// Main API Router (mounted at both /api and / so it works regardless of rewrite path stripping)
+const apiRouter = express.Router();
+
+// Health check endpoint
+apiRouter.get('/health', (_req: Request, res: Response) => {
   res.json({
     ok: true,
     service: 'jewellery-variation-studio',
@@ -68,7 +65,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
 });
 
 // Configuration endpoint
-app.get('/api/config', (_req: Request, res: Response) => {
+apiRouter.get('/config', (_req: Request, res: Response) => {
   res.json({
     supabaseUrl: process.env.SUPABASE_URL || 'https://eylkbycxhptmmqcpvloz.supabase.co',
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || '',
@@ -80,8 +77,8 @@ app.get('/api/config', (_req: Request, res: Response) => {
   });
 });
 
-// Analysis endpoint (Milestone 3)
-app.post('/api/analyze', upload.single('image'), async (req: Request, res: Response, next: NextFunction) => {
+// Analysis endpoint
+apiRouter.post('/analyze', upload.single('image'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -135,8 +132,8 @@ app.post('/api/analyze', upload.single('image'), async (req: Request, res: Respo
   }
 });
 
-// Generation endpoint (Milestone 4)
-app.post('/api/generate', async (req: Request, res: Response, next: NextFunction) => {
+// Generation endpoint
+apiRouter.post('/generate', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parseResult = GenerateInputSchema.safeParse(req.body);
     if (!parseResult.success) {
@@ -163,7 +160,7 @@ app.post('/api/generate', async (req: Request, res: Response, next: NextFunction
 });
 
 // Job query endpoint
-app.get('/api/jobs/:jobId', (req: Request, res: Response) => {
+apiRouter.get('/jobs/:jobId', (req: Request, res: Response) => {
   const job = jobStore.getJob(req.params.jobId);
   if (!job) {
     return res.status(404).json({
@@ -193,21 +190,14 @@ app.get('/api/jobs/:jobId', (req: Request, res: Response) => {
   });
 });
 
-// Serve client in production if built
-const clientDistPath = path.resolve(__dirname, '../../client/dist');
-if (fs.existsSync(clientDistPath)) {
-  console.log(`[Production] Serving static files from ${clientDistPath}`);
-  app.use(express.static(clientDistPath));
-  app.get('*', (_req: Request, res: Response) => {
-    res.sendFile(path.join(clientDistPath, 'index.html'));
-  });
-}
+// Mount on both /api and root /
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
 
 // Global error handler
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[API Error]', err);
 
-  // Multer errors (e.g. file too large)
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({
@@ -225,7 +215,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
 
-  // OpenAI moderation or policy errors
   if (err?.code === 'moderation_blocked' || err?.error?.code === 'moderation_blocked') {
     return res.status(422).json({
       error: {
@@ -235,7 +224,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
 
-  // Rate limit
   if (err?.status === 429 || err?.statusCode === 429) {
     return res.status(429).json({
       error: {
@@ -245,7 +233,6 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     });
   }
 
-  // Quota exceeded
   if (err?.code === 'insufficient_quota' || err?.error?.code === 'insufficient_quota') {
     return res.status(402).json({
       error: {
@@ -264,11 +251,13 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-if (!process.env.VERCEL) {
+// Only listen on port in local development mode (never inside Vercel serverless functions)
+const isServerless = Boolean(process.env.VERCEL) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) || process.env.NODE_ENV === 'production';
+if (!isServerless) {
   app.listen(PORT, () => {
     console.log(`✨ SWA Jewellery Studio Server running on http://localhost:${PORT}`);
   });
 }
 
+export { app };
 export default app;
-
