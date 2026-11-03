@@ -226,49 +226,74 @@ export async function analyzeDesign(params: {
 export async function generateCardImage(
   jobId: string,
   index: number,
-  qualityOverride?: Quality
+  qualityOverride?: Quality,
+  fallbackVariation?: Variation,
+  fallbackContext?: {
+    diamondCount?: number;
+    motif?: string;
+    clusterRhodiumFill?: boolean;
+    headShapeVariance?: boolean;
+  }
 ): Promise<{ index: number; imageBase64: string }> {
   const job = jobStore.getJob(jobId);
-  if (!job) {
-    throw new Error(`Job not found or expired: ${jobId}`);
+  const variation = job?.variations.find((v) => v.index === index) || fallbackVariation;
+  if (!variation) {
+    throw new Error(`Variation index ${index} not found for job ${jobId}`);
   }
 
-  const variation = job.variations.find((v) => v.index === index);
-  if (!variation) {
-    throw new Error(`Variation index ${index} not found in job ${jobId}`);
-  }
+  const diamondCount = job?.diamondCount ?? fallbackContext?.diamondCount ?? variation.stoneCount;
+  const motif = job?.original?.motif ?? fallbackContext?.motif ?? '';
+  const clusterRhodiumFill = job?.clusterRhodiumFill ?? fallbackContext?.clusterRhodiumFill ?? false;
+  const headShapeVariance = job?.headShapeVariance ?? fallbackContext?.headShapeVariance ?? false;
 
   const imageModel = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-sunburst';
   const size = (process.env.IMAGE_SIZE as any) || '1024x1024';
-  const quality = (qualityOverride || job.quality || process.env.IMAGE_QUALITY || 'medium') as any;
+  const quality = (qualityOverride || job?.quality || process.env.IMAGE_QUALITY || 'medium') as any;
 
-  const prompt = buildImagePrompt(variation, job.diamondCount, job.original.motif, job.clusterRhodiumFill, job.headShapeVariance);
+  const prompt = buildImagePrompt(variation, diamondCount, motif, clusterRhodiumFill, headShapeVariance);
 
   const startTime = Date.now();
   console.log(`[Generate Start] Job: ${jobId} | Card: ${index} | Model: ${imageModel} | Quality: ${quality}`);
 
+  const hasPhotoBuffer = job?.photoBuffer && job.photoBuffer.length > 0;
+
   const imageBuffer = await withRetry(`generateCardImage #${index}`, async () => {
     try {
-      const file = await toFile(job.photoBuffer, 'reference_photo.png', { type: job.mimeType });
-      const editResponse = await getOpenAI().images.edit({
-        model: imageModel,
-        image: file,
-        prompt,
-        size,
-        quality,
-      });
+      if (hasPhotoBuffer) {
+        const file = await toFile(job!.photoBuffer, 'reference_photo.png', { type: job!.mimeType });
+        const editResponse = await getOpenAI().images.edit({
+          model: imageModel,
+          image: file,
+          prompt,
+          size,
+          quality,
+        });
 
-      const b64 = editResponse.data?.[0]?.b64_json;
-      if (b64) {
-        return b64;
-      }
-      
-      const url = editResponse.data?.[0]?.url;
-      if (url) {
-        // Fetch and convert to base64
-        const resp = await fetch(url);
-        const arrayBuf = await resp.arrayBuffer();
-        return Buffer.from(arrayBuf).toString('base64');
+        const b64 = editResponse.data?.[0]?.b64_json;
+        if (b64) return b64;
+        const url = editResponse.data?.[0]?.url;
+        if (url) {
+          const resp = await fetch(url);
+          const arrayBuf = await resp.arrayBuffer();
+          return Buffer.from(arrayBuf).toString('base64');
+        }
+      } else {
+        // Fallback to text-to-image generate if photo buffer is not cached
+        const genResponse = await getOpenAI().images.generate({
+          model: imageModel,
+          prompt,
+          size,
+          quality,
+        });
+
+        const b64 = genResponse.data?.[0]?.b64_json;
+        if (b64) return b64;
+        const url = genResponse.data?.[0]?.url;
+        if (url) {
+          const resp = await fetch(url);
+          const arrayBuf = await resp.arrayBuffer();
+          return Buffer.from(arrayBuf).toString('base64');
+        }
       }
 
       throw new Error('Images API response contained neither b64_json nor URL');
@@ -277,16 +302,27 @@ export async function generateCardImage(
       const errMsg = err?.message || '';
       if (errMsg.includes('model') || errMsg.includes('not supported') || errMsg.includes('invalid_request_error')) {
         console.warn(`[Generate Fallback] Model ${imageModel} error: ${errMsg}. Trying gpt-image-2.5-flare...`);
-        const file = await toFile(job.photoBuffer, 'reference_photo.png', { type: job.mimeType });
-        const flareResponse = await getOpenAI().images.edit({
-          model: 'gpt-image-2.5-flare',
-          image: file,
-          prompt,
-          size,
-          quality,
-        });
-        const flareB64 = flareResponse.data?.[0]?.b64_json;
-        if (flareB64) return flareB64;
+        if (hasPhotoBuffer) {
+          const file = await toFile(job!.photoBuffer, 'reference_photo.png', { type: job!.mimeType });
+          const flareResponse = await getOpenAI().images.edit({
+            model: 'gpt-image-2.5-flare',
+            image: file,
+            prompt,
+            size,
+            quality,
+          });
+          const flareB64 = flareResponse.data?.[0]?.b64_json;
+          if (flareB64) return flareB64;
+        } else {
+          const flareResponse = await getOpenAI().images.generate({
+            model: 'gpt-image-2.5-flare',
+            prompt,
+            size,
+            quality,
+          });
+          const flareB64 = flareResponse.data?.[0]?.b64_json;
+          if (flareB64) return flareB64;
+        }
       }
       throw err;
     }

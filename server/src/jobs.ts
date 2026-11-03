@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { OriginalAnalysis, Variation } from './schemas.js';
 
 export interface JobRecord {
@@ -24,10 +27,22 @@ export interface JobRecord {
 class JobManager {
   private jobs = new Map<string, JobRecord>();
   private readonly TTL_MS = 60 * 60 * 1000; // 1 hour
+  private tmpDir = os.tmpdir();
 
   constructor() {
-    // Cleanup expired jobs every 10 minutes
-    setInterval(() => this.cleanup(), 10 * 60 * 1000);
+    // Cleanup expired jobs every 10 minutes, unref to avoid blocking serverless function completion
+    const timer = setInterval(() => this.cleanup(), 10 * 60 * 1000);
+    if (timer && typeof timer.unref === 'function') {
+      timer.unref();
+    }
+  }
+
+  private getFilePath(jobId: string): string {
+    return path.join(this.tmpDir, `swa_job_${jobId}.json`);
+  }
+
+  private getPhotoPath(jobId: string): string {
+    return path.join(this.tmpDir, `swa_job_${jobId}.photo`);
   }
 
   createJob(params: {
@@ -54,14 +69,69 @@ class JobManager {
       createdAt: Date.now(),
     };
     this.jobs.set(jobId, job);
+
+    // Save JSON and photo buffer to /tmp for multi-instance serverless resilience
+    try {
+      const serializable = {
+        jobId: job.jobId,
+        mimeType: job.mimeType,
+        originalFileName: job.originalFileName,
+        diamondCount: job.diamondCount,
+        countFor: job.countFor,
+        sku: job.sku,
+        stoneSize: job.stoneSize,
+        metal: job.metal,
+        mustKeep: job.mustKeep,
+        quality: job.quality,
+        clusterRhodiumFill: job.clusterRhodiumFill,
+        headShapeVariance: job.headShapeVariance,
+        original: job.original,
+        variations: job.variations,
+        createdAt: job.createdAt,
+      };
+      fs.writeFileSync(this.getFilePath(jobId), JSON.stringify(serializable), 'utf8');
+      if (job.photoBuffer && job.photoBuffer.length > 0) {
+        fs.writeFileSync(this.getPhotoPath(jobId), job.photoBuffer);
+      }
+    } catch (e) {
+      console.warn('[JobStore] Warning: Could not write job to tmp cache', e);
+    }
+
     return job;
   }
 
   getJob(jobId: string): JobRecord | undefined {
-    const job = this.jobs.get(jobId);
+    let job = this.jobs.get(jobId);
+    if (!job) {
+      // Try restoring from /tmp disk cache
+      try {
+        const filePath = this.getFilePath(jobId);
+        if (fs.existsSync(filePath)) {
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const data = JSON.parse(raw);
+          const photoPath = this.getPhotoPath(jobId);
+          const photoBuffer = fs.existsSync(photoPath) ? fs.readFileSync(photoPath) : Buffer.alloc(0);
+          job = {
+            ...data,
+            photoBuffer,
+            images: new Map(),
+          };
+          this.jobs.set(jobId, job as JobRecord);
+        }
+      } catch (e) {
+        console.warn('[JobStore] Warning: Failed to read job from tmp cache', e);
+      }
+    }
+
     if (!job) return undefined;
     if (Date.now() - job.createdAt > this.TTL_MS) {
       this.jobs.delete(jobId);
+      try {
+        const filePath = this.getFilePath(jobId);
+        const photoPath = this.getPhotoPath(jobId);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        if (fs.existsSync(photoPath)) fs.unlinkSync(photoPath);
+      } catch {}
       return undefined;
     }
     return job;
@@ -79,6 +149,12 @@ class JobManager {
     for (const [id, job] of this.jobs.entries()) {
       if (now - job.createdAt > this.TTL_MS) {
         this.jobs.delete(id);
+        try {
+          const filePath = this.getFilePath(id);
+          const photoPath = this.getPhotoPath(id);
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          if (fs.existsSync(photoPath)) fs.unlinkSync(photoPath);
+        } catch {}
       }
     }
   }

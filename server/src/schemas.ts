@@ -66,6 +66,11 @@ export const GenerateInputSchema = z.object({
   jobId: z.string().min(1, 'jobId is required'),
   index: z.coerce.number().int().min(1).max(10),
   quality: QualityEnum.optional(),
+  variation: VariationSchema.optional(),
+  diamondCount: z.coerce.number().optional(),
+  motif: z.string().optional(),
+  clusterRhodiumFill: z.boolean().optional(),
+  headShapeVariance: z.boolean().optional(),
 });
 
 export type GenerateInput = z.infer<typeof GenerateInputSchema>;

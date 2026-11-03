@@ -149,8 +149,13 @@ app.post('/api/generate', async (req: Request, res: Response, next: NextFunction
       });
     }
 
-    const { jobId, index, quality } = parseResult.data;
-    const result = await generateCardImage(jobId, index, quality);
+    const { jobId, index, quality, variation, diamondCount, motif, clusterRhodiumFill, headShapeVariance } = parseResult.data;
+    const result = await generateCardImage(jobId, index, quality, variation, {
+      diamondCount,
+      motif,
+      clusterRhodiumFill,
+      headShapeVariance,
+    });
     res.json(result);
   } catch (err: any) {
     next(err);

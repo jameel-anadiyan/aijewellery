@@ -93,17 +93,34 @@ export const App: React.FC = () => {
       ),
     }));
 
+    const currentVar = job?.variations.find((v) => v.index === index);
+
     try {
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId, index, quality }),
+        body: JSON.stringify({
+          jobId,
+          index,
+          quality,
+          variation: currentVar,
+          diamondCount: job?.diamondCount,
+          motif: job?.original?.motif,
+          clusterRhodiumFill: job?.clusterRhodiumFill,
+          headShapeVariance: job?.headShapeVariance,
+        }),
       });
 
-      const data = await response.json();
+      let data: any = null;
+      const responseText = await response.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        // Response is not JSON (e.g. Vercel 500/504 plain text error)
+      }
 
       if (!response.ok) {
-        const errorMsg = data?.error?.message || `Server returned status ${response.status}`;
+        const errorMsg = data?.error?.message || responseText || `Server returned status ${response.status}`;
         throw new Error(errorMsg);
       }
 
@@ -173,10 +190,16 @@ export const App: React.FC = () => {
         body: formData,
       });
 
-      const data = await response.json();
+      let data: any = null;
+      const responseText = await response.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        // Response is not JSON
+      }
 
       if (!response.ok) {
-        const errorMsg = data?.error?.message || 'Failed to analyze jewellery reference.';
+        const errorMsg = data?.error?.message || responseText || 'Failed to analyze jewellery reference.';
         throw new Error(errorMsg);
       }
 
