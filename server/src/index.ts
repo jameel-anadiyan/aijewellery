@@ -251,13 +251,18 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-// Only listen on port in local development mode (never inside Vercel serverless functions)
-const isServerless = Boolean(process.env.VERCEL) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) || process.env.NODE_ENV === 'production';
-if (!isServerless) {
-  app.listen(PORT, () => {
-    console.log(`✨ SWA Jewellery Studio Server running on http://localhost:${PORT}`);
-  });
-}
+// Listen on PORT dynamically (supporting both Vercel Services container & standalone)
+const server = app.listen(PORT, () => {
+  console.log(`✨ SWA Jewellery Studio Server running on port ${PORT}`);
+});
+
+server.on('error', (err: any) => {
+  if (err?.code === 'EADDRINUSE') {
+    console.warn(`[Server] Port ${PORT} already in use, continuing in handler mode`);
+  } else {
+    console.error('[Server Error]', err);
+  }
+});
 
 export { app };
 export default app;
