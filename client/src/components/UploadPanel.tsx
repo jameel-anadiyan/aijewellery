@@ -77,6 +77,57 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ onStartAnalysis, isLoa
   const isCountValid = !isNaN(countNumber) && countNumber >= 1 && countNumber <= 200;
   const isFormValid = Boolean(photo) && isCountValid && !isLoading;
 
+  const compressImageIfNeeded = async (file: File): Promise<File> => {
+    return new Promise((resolve) => {
+      // If file is small, keep original
+      if (file.size <= 2 * 1024 * 1024) {
+        return resolve(file);
+      }
+
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const maxDim = 1600;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(file);
+
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return resolve(file);
+            const optimizedFile = new File([blob], file.name.replace(/\.[^/.]+$/, '.jpg'), {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            });
+            resolve(optimizedFile);
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(file);
+      };
+      img.src = objectUrl;
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!photo) {
@@ -91,8 +142,10 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({ onStartAnalysis, isLoa
 
     setErrorMessage('');
 
+    const optimizedPhoto = await compressImageIfNeeded(photo);
+
     const formData = new FormData();
-    formData.append('image', photo);
+    formData.append('image', optimizedPhoto);
     formData.append('diamondCount', String(countNumber));
     formData.append('countFor', countFor);
     formData.append('sku', sku.trim());
