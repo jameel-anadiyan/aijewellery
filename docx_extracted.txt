@@ -1,0 +1,238 @@
+Jewellery Variation Studio — Antigravity Build Plan
+Oct 23, 2026 · @MOHAMED JAMEEL ANADIYAN
+Build a React web app where you upload one jewellery photo, type the diamond count, and get back 10 new design sketches, each on its own card with a name, description and specs, ready to download. Antigravity builds it from this plan in 7 milestones, and your OpenAI key stays on a small Node server.
+How the app works
+Upload: drop a product photo (JPG, PNG or WebP, up to 10 MB) and enter the diamond count. Optional: SKU, stone size, metal and notes on what must stay the same.
+Analyse: the server sends the photo and count to an OpenAI text model. It studies the design and returns 10 variation concepts as JSON: name, description, stone layout, setting, size estimate and an image prompt.
+Generate: the server makes 10 separate GPT Image 2.5 requests, each with your photo as the reference and one concept's prompt. It runs 3 at a time, and each card fills in as its image arrives.
+Review: each card shows the sketch, name, description, stone count and specs. Regenerate any card, or star the best ones.
+Download: save a single PNG, or download the starred or all cards as a ZIP with a CSV of names and descriptions.
+Every prompt repeats the exact diamond count you entered. Image models can still add or drop a stone, so check each card before downloading (see Known limits).
+Set up Antigravity
+Antigravity is Google's agent-first IDE. You give its agent a task, it writes an Implementation Plan and a Task List, makes the changes, then shows a Walkthrough with screenshots of what it tested in the browser.
+Install Antigravity, sign in with your Google account and choose Review-driven development as the agent policy, so you approve each plan before code runs.
+Create an empty folder named jewellery-variation-studio and open it as a workspace.
+Export this doc as Markdown and save it in that folder as PLAN.md.
+Save the rules below as .agent/rules/project.md (the workspace rules folder in current Antigravity guides). If your version uses a different place, paste the rules at the top of your first prompt.
+Switch the agent to Planning mode and send the milestone prompts in order (see Build milestones). After each one, read the Implementation Plan, leave inline comments if anything is off, then approve.
+Before milestone 3, create an OpenAI API key, paste it into server/.env yourself and add a few dollars of credit. OpenAI may ask you to verify your organisation before GPT Image models work.
+# Project rules - Jewellery Variation Studio- Follow PLAN.md. Build one milestone at a time and wait for my approval before the next.- TypeScript everywhere. Frontend: Vite + React + Tailwind CSS. Backend: Node + Express.- The OpenAI API key lives only in server/.env. Never import it in the client, log it or send it to the browser.- Model names, image size, quality and parallel limit come from server/.env, never hard-coded.- One React component per file in client/src/components; keep each file short.- Validate every request and every model reply on the server with zod and return clear JSON errors.- After each milestone run npm run build and npm run lint, fix all errors, then test the flow in the browser and include screenshots in the Walkthrough.- Never commit .env, uploads or generated images; keep them in .gitignore.
+Tech stack and architecture
+app architecture · browser, your server, OpenAI
+The browser never sees your API key. It sends the photo to your server once, then asks for each card's sketch by job and card number.
+Part
+Choice
+Why
+Frontend
+Vite + React + TypeScript + Tailwind CSS
+Fast dev server and simple components
+Backend
+Node.js 20+ with Express and TypeScript
+Keeps the OpenAI key secret and handles uploads
+Uploads
+multer (memory storage)
+Reads the photo from the form without saving files
+Validation
+zod
+Checks inputs and the model's JSON reply
+OpenAI
+Official openai npm package
+Responses API for planning, Images API for sketches
+Parallel calls
+p-limit
+Caps image calls at 3 at once
+Downloads
+JSZip + file-saver
+Builds the ZIP and CSV in the browser
+Saved results
+IndexedDB (idb-keyval)
+Keeps the last run after a page reload
+Dev runner
+concurrently
+npm run dev starts client and server together
+Screens and features
+The app has two screens: an upload panel, then a results grid of 10 cards.
+Upload panel
+Field
+Input
+Required
+Notes
+Product photo
+Drop zone with preview
+Yes
+JPG, PNG or WebP, max 10 MB
+Diamond count
+Number, 1–200
+Yes
+Every variation uses exactly this many
+Count is for
+One piece / the pair
+Yes
+For earrings, "the pair" halves the count per earring in the prompts
+SKU or name
+Text
+No
+Used in file names, e.g. 28035
+Stone size
+Text, e.g. 1.0 mm
+No
+Leave blank to let the model estimate
+Metal
+Yellow, rose, white or two-tone
+No
+Default: same as the photo
+Must keep
+Text
+No
+e.g. "bypass band, screw back, light weight"
+Quality
+Low, medium or high
+No
+Default medium; low for quick drafts
+Each result card
+Number and name (e.g. 03 · Pear Loop) above the sketch; click the sketch to view it large
+Description of one or two sentences, and a stone line such as "10 stones · 2 rows of 5"
+Specs: setting, approximate size, and gold use compared with the original
+Status: waiting, generating (spinner), done, or failed with a Retry button
+Buttons: Download PNG, Regenerate, and ★ Best
+Toolbar above the grid: progress (e.g. 7 of 10 ready), Download starred (ZIP), Download all (ZIP) and New upload.
+File names: each image saves as {sku}_{nn}_{slug}.png, for example 28035_03_pear-loop.png. Each ZIP also holds variations.csv and variations.json. Both list the number, name, description, stone count, layout, setting, size and gold use for every design.
+Backend API
+The server has three endpoints. It keeps each uploaded photo in memory for 1 hour under a jobId, so the 10 image calls never re-upload it.
+Method
+Path
+Sends
+Returns
+POST
+/api/analyze
+Form data: image, diamondCount, countFor (piece or pair), optional sku, stoneSize, metal, mustKeep
+{ jobId, original, variations[10] }
+POST
+/api/generate
+JSON: jobId, index (1–10), optional quality
+{ index, imageBase64 }
+GET
+/api/health
+Nothing
+{ ok: true }
+Shape of the /api/analyze reply:
+{  "jobId": "a1b2c3",  "original": {    "productType": "ring",    "metal": "yellow gold band, white gold pavé",    "stoneCount": 10,    "stoneLayout": "open oval C of 10 stones inside a gold loop",    "summary": "Bypass ring: the band wraps into an oval loop around a pavé C"  },  "variations": [    {      "index": 1,      "name": "Heart Loop",      "description": "The pavé C becomes an open heart inside the same gold loop.",      "stoneCount": 10,      "stoneLayout": "10 around the open heart, 5 and 6 either side of the point",      "setting": "shared-prong pavé line",      "sizeMm": "8.1 x 7.1",      "goldVsOriginal": "about the same",      "imagePrompt": "(the full image prompt for this design)"    }  ]}
+Rules the server enforces:
+Exactly 10 variations, each with a unique name; if not, retry the analysis once.
+Every stoneCount equals the count the user entered (per piece). If the model returns another number, the server overwrites it and rebuilds that prompt.
+Errors come back as { error: { code, message } }: 400 bad input, 413 file too large, 422 blocked by moderation (moderation_blocked: change the request, never auto-retry), 429 rate limited (the client waits and retries), 500 anything else.
+OpenAI setup
+The app makes two kinds of OpenAI call: one text-model call that plans the 10 designs, then one GPT Image 2.5 call per design that draws it from your photo. OpenAI's current image models are gpt-image-2.5-sunburst, which it recommends where editing precision matters, and gpt-image-2.5-flare, which is faster.
+server/.env (Antigravity writes .env.example; you paste the real key):
+OPENAI_API_KEY=sk-...OPENAI_TEXT_MODEL=gpt-6-lunaOPENAI_IMAGE_MODEL=gpt-image-2.5-sunburstIMAGE_QUALITY=mediumIMAGE_SIZE=1024x1024IMAGE_FORMAT=pngMAX_PARALLEL=3PORT=8787
+gpt-6-luna is a low-cost model that reads images and supports Structured Outputs; switch to gpt-6-astra if you want richer design ideas at a higher price. Confirm both IDs on OpenAI's models page before the first run, because names change with new releases.
+Image call settings
+Setting
+Value
+Why
+model
+gpt-image-2.5-sunburst
+Best at following a reference image
+image
+The uploaded photo
+Keeps scale, metal colours and design family
+size
+1024x1024
+Square cards; 1536x1024 also works
+quality
+medium (low for drafts, high for finals)
+Main cost and speed control
+output_format
+png
+Clean downloads; jpeg returns faster
+n
+1
+One design per call, so all 10 images differ
+Analysis call (Responses API with Structured Outputs; a sketch for Antigravity to check against the current SDK docs):
+const res = await openai.responses.parse({  model: process.env.OPENAI_TEXT_MODEL!,  input: [    { role: "system", content: ANALYSIS_PROMPT },    { role: "user", content: [      { type: "input_text", text: `Diamond count per piece: ${count}. SKU: ${sku}. Stone size: ${stoneSize || "estimate"}. Metal: ${metal || "same as photo"}. Must keep: ${mustKeep || "none"}` },      { type: "input_image", image_url: `data:${mime};base64,${photo.toString("base64")}` },    ] },  ],  text: { format: zodTextFormat(AnalysisSchema, "analysis") },});const analysis = res.output_parsed; // 10 validated variations
+Image call (Images API edit, once per variation):
+const img = await openai.images.edit({  model: process.env.OPENAI_IMAGE_MODEL!,  image: await toFile(photo, "original.png", { type: mime }),  prompt: buildImagePrompt(variation, count),  size: process.env.IMAGE_SIZE,  quality,  output_format: "png",});const imageBase64 = img.data?.[0]?.b64_json;
+Reliability
+Run at most 3 image calls at once (p-limit). OpenAI says complex prompts can take up to 2 minutes, so set a 180-second timeout.
+Retry rate-limit (429) and server (5xx) errors twice, after 2 s then 6 s. Never auto-retry quota or moderation errors.
+Log only the job id, variation index, timing and error code; never the key or the image data.
+Prompts the app sends
+Keep both prompts in server/src/prompts.ts so you can tune them without touching the rest of the code. The server fills the {placeholders}.
+Analysis prompt (system message for the text model):
+You are a senior fine-jewellery designer. You receive one product photo and its exact diamond count per piece: {count}.1. Study the original: product type, metal colours, head or motif, how the stones are arranged, setting style, and band or earring-back type.2. Design 10 new variations for a lightweight collection. Rules for every variation:   - EXACTLY {count} diamonds per piece, all the same size as the original. No extra accent stones. No coloured stones unless the original has them.   - Lightweight: thin wire (about 1.0-1.2 mm), open and airy shapes, no heavy solid metal.   - Same design family: same mood and proportions, two-tone if the original is two-tone, same band or earring-back type.   - Clearly different from each other. Spread them across a new motif shape (heart, round, marquise, pear, square), a new stone arrangement (cluster, two rows, split groups) and a new construction (spiral, bypass, infinity, crossover).   - Original designs only: no brand look-alikes, no logos or text.3. For each variation return: name (2-3 words), description (max 2 sentences), stoneCount, stoneLayout (where each stone sits), setting, sizeMm (estimate), goldVsOriginal (lighter, about the same or more), and imagePrompt (a vivid visual description of the design for an image model).Return only JSON that matches the schema.
+Image prompt template (built by the server for each card from that variation's fields, so the stone count always comes from your input):
+Use the attached product photo as the reference for scale, metal colours and design family. Draw ONE new jewellery design.Design: {name} - {description}Details: {imagePrompt}Stones: EXACTLY {count} round brilliant diamonds, laid out as: {stoneLayout}. Draw every diamond clearly with facet lines so each one can be counted. No other stones.Setting: {setting}. Lightweight construction in thin wire.Style: professional jewellery design sketch, fine pencil and ink lines on white paper with soft watercolour shading in gold and white gold. Same viewing angle as the reference photo. One design only, centred, plain white background, no text, no hands, no props.
+Build milestones
+Send these prompts to Antigravity one at a time in Planning mode. Each milestone ends with something you can see working, so problems surface early.
+1 · Project skeleton
+Done when: npm run dev opens the app and /api/health returns ok.
+Read PLAN.md and .agent/rules/project.md. Build milestone 1: a project with client/ (Vite + React + TypeScript + Tailwind CSS) and server/ (Node + Express + TypeScript). The root package.json starts both with `npm run dev` using concurrently. Add GET /api/health and a Vite proxy from /api to the server. Create server/.env.example with the variables from PLAN.md (no real key) and a .gitignore. Show me the running app in the browser.
+2 · Upload panel
+Done when: the photo previews, bad inputs show messages, and Generate stays disabled until the form is valid.
+Build milestone 2: the upload panel from PLAN.md "Screens and features". Drag-and-drop photo with preview (JPG, PNG or WebP, max 10 MB), diamond count (required, 1-200), "count is for" (one piece or the pair), SKU, stone size, metal, must keep and quality. Disable Generate until the photo and count are valid. No API calls yet.
+3 · Analysis endpoint
+Done when: an upload returns 10 named design cards with specs (no images yet).
+Build milestone 3: POST /api/analyze as described in PLAN.md "Backend API" and "OpenAI setup". Use multer memory storage, zod validation, the analysis prompt from PLAN.md in server/src/prompts.ts, and Structured Outputs so the reply matches the schema. Keep the photo in memory for 1 hour under a jobId. Force every variation's stoneCount to the per-piece count. In the client, show 10 cards with number, name, description and specs, each with a "waiting for image" placeholder. My key is already in server/.env.
+4 · Image generation
+Done when: each card fills with its own sketch, with at most 3 generating at once.
+Build milestone 4: POST /api/generate as described in PLAN.md. It takes jobId and index, builds the image prompt from that variation using the template in PLAN.md with the exact per-piece diamond count, and calls the Images API edit with the stored photo, using OPENAI_IMAGE_MODEL, IMAGE_SIZE and IMAGE_QUALITY from .env. In the client, request all 10 cards with at most 3 running at once, show a spinner per card and fill each card as soon as its image arrives. Test with quality low first.
+5 · Card actions and downloads
+Done when: PNG and ZIP downloads work with the right file names and a correct CSV.
+Build milestone 5: card actions and downloads from PLAN.md. Per card: Download PNG named {sku}_{nn}_{slug}.png, Regenerate (a new image for that card only) and a Best star. Toolbar: progress, Download starred and Download all as ZIP with JSZip, each including variations.csv and variations.json. Add a lightbox to view a sketch large.
+6 · Reliability and polish
+Done when: a failed card can be retried on its own, results survive a page reload, and the grid works on a phone.
+Build milestone 6: reliability and polish. Retry 429 and 5xx errors twice with backoff, use a 180-second timeout, and show clear messages for moderation_blocked and quota errors. Add a Retry button on failed cards. Save results in IndexedDB so they survive a reload. Make the grid one column on phones, and show the estimated cost of a run (from PLAN.md "Costs") next to the Generate button.
+7 · Deploy
+Done when: the app runs at a live URL behind a password, with the key stored only as a server secret.
+Build milestone 7: deploy. Serve the built client from the Express server, add a simple password gate (APP_PASSWORD in .env), limit the API to 20 runs per day, and deploy to Render or Google Cloud Run with OPENAI_API_KEY set as a secret environment variable. Give me the live URL and the steps to redeploy after changes.
+Testing checklist
+Run these after milestone 6, and again after deploying.
+☐ Upload a ring photo with 10 diamonds: 10 cards appear with different names and descriptions
+☐ Every card shows the entered stone count; count the stones on each sketch
+☐ Upload an earring photo with 10 per pair and choose "the pair": each card shows 5 per earring
+☐ Bad inputs (no photo, count 0, a 20 MB file, a PDF) each show a clear message
+☐ Turn Wi-Fi off mid-run: only the unfinished cards fail, and Retry recovers them
+☐ Regenerate changes only that card's image
+☐ Download PNG, Download starred and Download all give the right file names and CSV columns
+☐ Reload the page: the last run comes back
+☐ Search the built client files for "sk-": the API key must not appear
+☐ At phone width, cards show one per row and buttons are easy to tap
+Costs, speed and limits
+A 10-design run at medium quality should cost roughly $0.55–$0.65. That covers about $0.53 of images, roughly 1 cent per image for reading your reference photo, and well under 1 cent for the analysis. These are estimates. GPT Image 2.5 bills $8 per 1M image-input tokens and $30 per 1M image-output tokens, the same rates as GPT Image 2, so the figures below use GPT Image 2's per-image estimates. Check OpenAI's pricing page before relying on them.
+Quality
+Per image (1024×1024)
+10 images
+Use for
+Low
+about $0.006
+about $0.06
+Testing and quick drafts
+Medium
+about $0.053
+about $0.53
+Everyday runs
+High
+about $0.211
+about $2.11
+Final presentation images
+Speed: OpenAI says one image can take up to 2 minutes. With 3 running at once, expect a full set in roughly 2–8 minutes. Low quality and JPEG output are quicker, and gpt-image-2.5-flare has up to 50% lower latency than Sunburst.
+Access: OpenAI may ask you to verify your organisation before GPT Image models work.
+Rate limits depend on your OpenAI usage tier. Raise MAX_PARALLEL only if you never see 429 errors.
+Cost controls in this plan: medium quality by default, the estimated cost shown before Generate, single-card regenerate instead of whole runs, and a cap of 20 runs per day once deployed.
+Known limits and next ideas
+The biggest limit is stone accuracy. Image models can add or drop a small diamond even when the prompt gives the exact number, so count the stones on each card before downloading and use Regenerate when one is off.
+Sizes and gold use on the cards are the model's estimates from your photo, not measurements. Confirm them in CAD before costing.
+The sketches are concept art, not production drawings, so very fine prongs may be simplified.
+Moderation occasionally blocks a request. The card shows the reason, and you can edit the notes and retry.
+Ideas to add once the basics work:
+Stone check: after each image, ask the text model to count the visible diamonds and flag cards that don't match. Treat it as a hint, since it can miscount too.
+Detail sheet: a "More detail" button that draws a top view, side view and numbered stone map for one chosen design.
+Shopify drafts: turn starred designs into draft products in your SWA Diamonds store, with the name and description filled in.
+History: a page of past runs you can search by SKU.
+Sources
+OpenAI image generation guide: current models, the edit endpoint, parameters and latency
+ChatGPT Images 2.5 pricing (eesel): token rates and per-image estimates, September 2026
+OpenAI image pricing tracker (CostGoat): per-image price ranges, updated October 2026
+GPT-6 model family (LLM Reference): text model IDs and prices
+Antigravity guide: rules, workflows and MCP (Substack): rules and workflows folders
+Google Antigravity IDE guide (OpenReplay): artifacts, Planning and Fast modes, review policy
