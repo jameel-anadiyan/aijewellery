@@ -259,6 +259,11 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`✨ SWA Jewellery Studio Server running on http://localhost:${PORT}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`✨ SWA Jewellery Studio Server running on http://localhost:${PORT}`);
+  });
+}
+
+export default app;
+
