@@ -3,13 +3,20 @@
   "services": {
     "client": {
       "root": "client",
-      "framework": "vite"
+      "framework": "vite",
+      "buildCommand": "npm run build",
+      "outputDirectory": "dist"
     },
     "server": {
       "root": "server",
       "framework": "express",
       "entrypoint": "dist/index.js",
-      "maxDuration": 60
+      "buildCommand": "npm run build",
+      "functions": {
+        "dist/index.js": {
+          "maxDuration": 60
+        }
+      }
     }
   },
   "rewrites": [
@@ -27,4 +34,3 @@
     }
   ]
 }
-
