@@ -3,17 +3,14 @@
   "services": {
     "client": {
       "root": "client",
-      "framework": "vite",
-      "buildCommand": "npm run build",
-      "outputDirectory": "dist"
+      "framework": "vite"
     },
     "server": {
       "root": "server",
       "framework": "express",
-      "entrypoint": "dist/index.js",
-      "buildCommand": "npm run build",
+      "entrypoint": "src/index.ts",
       "functions": {
-        "dist/index.js": {
+        "src/index.ts": {
           "maxDuration": 60
         }
       }
